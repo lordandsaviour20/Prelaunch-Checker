@@ -1,0 +1,184 @@
+/* ==========================================================================
+   Prelaunch Checker — design tokens
+   Style: Dark Mode (OLED) + Glassmorphism depth layering
+   Type:  Fira Code / Fira Sans
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Surfaces (near-black OLED base, layered upward) ---- */
+  --color-background: #020617;
+  --color-surface-1: #0e1223;
+  --color-surface-2: #1a1e2f;
+  --color-surface-3: #232841;
+
+  /* Glass layers — translucent so the aurora backdrop bleeds through */
+  --glass-bg: rgba(20, 26, 48, 0.55);
+  --glass-bg-strong: rgba(14, 18, 35, 0.82);
+  --glass-border: rgba(148, 163, 184, 0.14);
+  --glass-border-lit: rgba(148, 163, 184, 0.28);
+  --glass-blur: 16px;
+
+  /* ---- Text ---- */
+  --color-foreground: #f8fafc;
+  --color-muted-foreground: #94a3b8;
+  --color-subtle-foreground: #53719b;
+
+  /* ---- Brand / status ---- */
+  --color-accent: #ffffff;
+  --color-accent-deep: #00d44e;
+  --color-accent-soft: rgba(34, 197, 94, 0.14);
+  --color-on-accent: #04210f;
+
+  --color-pass:#EEEEEE;
+  --color-pass-bg: rgba(34, 197, 94, 0.13);
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(251, 191, 36, 0.13);
+  --color-fail: #f87171;
+  --color-fail-bg: rgba(248, 113, 113, 0.13);
+  --color-queued: #38bdf8;
+
+  --color-border: rgba(51, 65, 85, 0.75);
+  --color-ring: #EEEEEE;
+
+  /* ---- Typography ---- */
+  --font-sans: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 0.6875rem; /* 11px — labels only, never body */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-base: 0.9375rem; /* 15px */
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.5rem;
+
+  /* ---- Spacing (density 6/10 — standard) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ---- Elevation: dark UIs need glow + rim light, not just drop shadow ---- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px -4px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 18px 48px -12px rgba(0, 0, 0, 0.75);
+  --shadow-4: 0 32px 80px -20px rgba(0, 0, 0, 0.85);
+  --rim-light: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glow-accent: 0 0 15px -6px #EEEEEE;
+
+  /* ---- Motion ---- */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur-base: 240ms;
+  --dur-slow: 520ms;
+
+  /* 3D */
+  --perspective: 1200px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--color-foreground);
+  background: #000000;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Focus: never removed, always visible against the dark base */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: rgba(34, 197, 94, 0.3);
+  color: #fff;
+}
+
+/* Scrollbars styled to match the surface stack */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #33395a;
+  background-clip: content-box;
+}
+
+/* Global motion opt-out — every animation in this app is decorative */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Screen-reader-only, still focusable */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
