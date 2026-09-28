@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import type { CheerioAPI } from 'cheerio';
+import * as tls from 'tls';
 import {
   AccessibleResult,
   ImagesAltResult,
   MetaDescriptionResult,
+  RobotsResult,
+  SitemapResult,
+  SslResult,
   Status,
   TitleResult,
   ViewportResult,
@@ -108,5 +112,138 @@ export class ChecksService {
     if (missingRatio > 0.5) status = 'fail';
     else if (missingRatio > 0) status = 'warning';
     return { status, total, missingAlt, missingAltList };
+  }
+  async checkRobotsTxt(baseUrl: string): Promise<RobotsResult> {
+    try {
+      const robotsUrl = new URL('/robots.txt', baseUrl).toString();
+      const response = await axios.get(robotsUrl, {
+        timeout: 8000,
+        validateStatus: () => true,
+      });
+      if (response.status === 404) {
+        return { status: 'fail', reason: 'robots.txt not found' };
+      }
+      if (response.status !== 200) {
+        return {
+          status: 'warning',
+          reason: `Unexpected status ${response.status}`,
+        };
+      }
+      const content = (response.data || '').toString().trim();
+      if (!content) {
+        return { status: 'warning', reason: 'robots.txt is empty' };
+      }
+      const disallowsAll = /User-agent:\s*\*\s*\n\s*Disallow:\s*\/\s*$/im.test(
+        content,
+      );
+      if (disallowsAll) {
+        return {
+          status: 'warning',
+          reason: 'robots.txt disallows all crawling',
+          content,
+        };
+      }
+      return { status: 'pass', content };
+    } catch (err) {
+      return { status: 'fail', reason: errText(err) };
+    }
+  }
+
+  async checkSitemap(
+    baseUrl: string,
+    robotsContent?: string,
+  ): Promise<SitemapResult> {
+    try {
+      const sitemapUrl = new URL('/sitemap.xml', baseUrl).toString();
+      const response = await axios.get(sitemapUrl, {
+        timeout: 8000,
+        validateStatus: () => true,
+      });
+      if (
+        response.status === 200 &&
+        (response.data || '').toString().includes('<')
+      ) {
+        return { status: 'pass', url: sitemapUrl };
+      }
+    } catch {
+      // ignore and fall back to robots.txt
+    }
+    if (robotsContent) {
+      const match = robotsContent.match(/^Sitemap:\s*(\S+)/im);
+      if (match) {
+        return { status: 'pass', url: match[1] };
+      }
+    }
+    return {
+      status: 'fail',
+      reason: 'No sitemap found at /sitemap.xml or in robots.txt',
+    };
+  }
+
+  checkSSL(hostname: string): Promise<SslResult> {
+    return new Promise((resolve) => {
+      const socket = tls.connect(
+        { host: hostname, port: 443, servername: hostname, timeout: 8000 },
+        () => {
+          try {
+            const cert = socket.getPeerCertificate();
+            socket.end();
+
+            if (!cert || !cert.valid_to) {
+              return resolve({
+                status: 'fail',
+                reason: 'No certificate returned',
+              });
+            }
+
+            const validTo = new Date(cert.valid_to);
+            const daysRemaining = Math.floor(
+              (validTo.getTime() - Date.now()) / (1000 * 60 * 60 * 24),
+            );
+
+            if (daysRemaining < 0) {
+              return resolve({
+                status: 'fail',
+                reason: 'Certificate expired',
+                validTo: cert.valid_to,
+              });
+            }
+            if (!socket.authorized) {
+              return resolve({
+                status: 'fail',
+                reason: String(
+                  socket.authorizationError || 'Certificate not trusted',
+                ),
+              });
+            }
+            if (daysRemaining <= 30) {
+              return resolve({
+                status: 'warning',
+                reason: `Certificate expires in ${daysRemaining} days`,
+                validTo: cert.valid_to,
+              });
+            }
+
+            return resolve({
+              status: 'pass',
+              issuer: cert.issuer?.O as string | undefined,
+              validTo: cert.valid_to,
+              daysRemaining,
+            });
+          } catch (err) {
+            socket.end();
+            resolve({ status: 'fail', reason: errText(err) });
+          }
+        },
+      );
+
+      socket.on('error', (err) =>
+        resolve({ status: 'fail', reason: errText(err) }),
+      );
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve({ status: 'fail', reason: 'Connection timed out' });
+      });
+    });
   }
 }

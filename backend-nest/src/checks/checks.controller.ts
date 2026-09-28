@@ -28,4 +28,14 @@ export class ChecksController {
       imagesAlt: this.checks.checkImagesAlt($),
     };
   }
+  @Get('site-test')
+  async siteTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const robots = await this.checks.checkRobotsTxt(normalized);
+    const sitemap = await this.checks.checkSitemap(normalized, robots.content);
+    const ssl = await this.checks.checkSSL(new URL(normalized).hostname);
+    const { content, ...robotsRest } = robots;
+    return { robots: { ...robotsRest, contentLength: content?.length ?? 0 }, sitemap, ssl };
+  }
 }

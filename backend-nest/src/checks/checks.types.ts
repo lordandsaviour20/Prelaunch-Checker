@@ -31,3 +31,23 @@ export interface TitleResult {
     missingAlt: number;
     missingAltList: string[];
   }
+
+  export interface RobotsResult {
+    status: Status;
+    reason?: string;
+    content?: string;
+  }
+  
+  export interface SitemapResult {
+    status: Status;
+    url?: string;
+    reason?: string;
+  }
+  
+  export interface SslResult {
+    status: Status;
+    reason?: string;
+    validTo?: string;
+    issuer?: string;
+    daysRemaining?: number;
+  }
