@@ -121,3 +121,40 @@ export interface PageResult {
     url: string;
     checks: CheckMap;
   }
+
+  export interface CheckDetail {
+    status: Status;
+    value?: string;
+    length?: number;
+    total?: number;
+    missingAlt?: number;
+    missingAltList?: string[];
+    broken?: { url: string; statusCode: number | null; error?: string }[];
+    statusCode?: number | null;
+    responseTimeMs?: number;
+    error?: string;
+    reason?: string;
+    found?: number;
+    types?: (string | string[])[];
+    hasArticleOrSection?: boolean;
+    h1Count?: number;
+    wordCount?: number;
+  }
+  
+  export interface AggregatedCheck {
+    status: Status;
+    total: number;
+    failing: number;
+    warning: number;
+    passing: number;
+    issues: { url: string; status: Status; detail: string }[];
+  }
+  
+  export interface RunCrawlChecksResult extends ScoreResult {
+    url: string;
+    checkedAt: string;
+    checks: CheckMap;
+    isCrawl: true;
+    pagesCrawled: number;
+    pages: PageResult[];
+  }
