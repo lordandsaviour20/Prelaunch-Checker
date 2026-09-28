@@ -51,3 +51,18 @@ export interface TitleResult {
     issuer?: string;
     daysRemaining?: number;
   }
+
+  export interface LinkCheckResult {
+    url: string;
+    statusCode: number | null;
+    ok: boolean;
+    error?: string;
+  }
+  
+  export interface BrokenLinksResult {
+    status: Status;
+    total: number;
+    broken: { url: string; statusCode: number | null; error?: string }[];
+  }
+
+  

@@ -38,4 +38,14 @@ export class ChecksController {
     const { content, ...robotsRest } = robots;
     return { robots: { ...robotsRest, contentLength: content?.length ?? 0 }, sitemap, ssl };
   }
+
+  @Get('links-test')
+  async linksTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable', accessible };
+    const $ = cheerio.load(accessible.html);
+    return this.checks.checkBrokenLinks($, normalized);
+  }
 }

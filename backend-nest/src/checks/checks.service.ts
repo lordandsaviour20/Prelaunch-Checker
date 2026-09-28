@@ -4,7 +4,9 @@ import type { CheerioAPI } from 'cheerio';
 import * as tls from 'tls';
 import {
   AccessibleResult,
+  BrokenLinksResult,
   ImagesAltResult,
+  LinkCheckResult,
   MetaDescriptionResult,
   RobotsResult,
   SitemapResult,
@@ -13,7 +15,10 @@ import {
   TitleResult,
   ViewportResult,
 } from './checks.types';
-import { errText } from './checks.utils';
+import { errText, runWithConcurrencyLimit } from './checks.utils';
+
+const MAX_LINKS_TO_CHECK = 40;
+const CONCURRENCY = 5;
 
 @Injectable()
 export class ChecksService {
@@ -245,5 +250,79 @@ export class ChecksService {
         resolve({ status: 'fail', reason: 'Connection timed out' });
       });
     });
+  }
+  extractLinks($: CheerioAPI, baseUrl: string): string[] {
+    const hrefs = new Set<string>();
+    $('a[href]').each((i, el) => {
+      const href = $(el).attr('href');
+      if (!href) return;
+      if (
+        href.startsWith('#') ||
+        href.startsWith('mailto:') ||
+        href.startsWith('tel:') ||
+        href.startsWith('javascript:')
+      ) {
+        return;
+      }
+      try {
+        const absolute = new URL(href, baseUrl).toString();
+        hrefs.add(absolute);
+      } catch {
+        // ignore malformed hrefs
+      }
+    });
+    return Array.from(hrefs).slice(0, MAX_LINKS_TO_CHECK);
+  }
+
+  async checkSingleLink(url: string): Promise<LinkCheckResult> {
+    try {
+      let response = await axios.head(url, {
+        timeout: 8000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+      });
+
+      if (response.status === 405 || response.status === 501) {
+        response = await axios.get(url, {
+          timeout: 8000,
+          maxRedirects: 5,
+          validateStatus: () => true,
+        });
+      }
+
+      return { url, statusCode: response.status, ok: response.status < 400 };
+    } catch (err) {
+      return { url, statusCode: null, ok: false, error: errText(err) };
+    }
+  }
+
+  async checkBrokenLinks(
+    $: CheerioAPI,
+    baseUrl: string,
+  ): Promise<BrokenLinksResult> {
+    const links = this.extractLinks($, baseUrl);
+    if (links.length === 0) {
+      return { status: 'pass', total: 0, broken: [] };
+    }
+
+    const results = await runWithConcurrencyLimit(links, CONCURRENCY, (link) =>
+      this.checkSingleLink(link),
+    );
+    const broken = results.filter((r) => !r.ok);
+
+    const brokenRatio = broken.length / results.length;
+    let status: Status = 'pass';
+    if (brokenRatio > 0.2) status = 'fail';
+    else if (brokenRatio > 0) status = 'warning';
+
+    return {
+      status,
+      total: results.length,
+      broken: broken.map((b) => ({
+        url: b.url,
+        statusCode: b.statusCode,
+        error: b.error,
+      })),
+    };
   }
 }
