@@ -117,3 +117,7 @@ export interface RunAllChecksResult extends ScoreResult {
   checkedAt: string;
   checks: CheckMap;
 }
+export interface PageResult {
+    url: string;
+    checks: CheckMap;
+  }

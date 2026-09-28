@@ -27,6 +27,7 @@
     "axios": "^1.20.0",
     "cheerio": "^1.2.0",
     "ip-range-check": "^0.2.1",
+    "playwright": "^1.63.0",
     "reflect-metadata": "^0.2.2",
     "robots-parser": "^3.0.1",
     "rxjs": "^7.8.1"

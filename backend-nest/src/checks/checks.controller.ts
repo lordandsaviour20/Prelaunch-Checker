@@ -1,10 +1,14 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
 import { ChecksService } from './checks.service';
 import * as cheerio from 'cheerio';
+import { CrawlerService } from './crawler.service';
 
 @Controller('checks')
 export class ChecksController {
-  constructor(private readonly checks: ChecksService) {}
+    constructor(
+        private readonly checks: ChecksService,
+        private readonly crawler: CrawlerService,
+      ) {}
 
   @Get('test')
   async test(@Query('url') url: string) {
@@ -70,5 +74,18 @@ export class ChecksController {
     const normalized = this.checks.normalizeUrl(url);
     if (!normalized) throw new BadRequestException('Invalid URL');
     return this.checks.runAllChecks(normalized);
+  }
+  @Get('crawl-test')
+  async crawlTest(@Query('url') url: string, @Query('max') max = '3') {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const maxPages = Math.min(Number(max) || 3, 10);
+    const pages = await this.crawler.crawlSite(normalized, maxPages);
+    return pages.map((p) => ({
+      url: p.url,
+      statuses: Object.fromEntries(
+        Object.entries(p.checks).map(([key, value]) => [key, value.status]),
+      ),
+    }));
   }
 }
