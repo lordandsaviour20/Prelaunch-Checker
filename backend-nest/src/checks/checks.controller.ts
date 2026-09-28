@@ -65,4 +65,10 @@ export class ChecksController {
       antiBotAccess: await this.checks.checkAntiBotAccess(normalized),
     };
   }
+  @Get('run')
+  async run(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    return this.checks.runAllChecks(normalized);
+  }
 }

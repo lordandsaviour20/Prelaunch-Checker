@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import robotsParser from 'robots-parser';
 import * as tls from 'tls';
@@ -8,12 +9,16 @@ import {
   AiCrawlerAccessResult,
   AntiBotResult,
   BrokenLinksResult,
+  CheckMap,
+  Grade,
   ImagesAltResult,
   JsDependenceResult,
   LinkCheckResult,
   LlmsTxtResult,
   MetaDescriptionResult,
   RobotsResult,
+  RunAllChecksResult,
+  ScoreResult,
   SemanticHtmlResult,
   SitemapResult,
   SslResult,
@@ -38,6 +43,30 @@ const AI_BOTS = [
   { name: 'Googlebot', company: 'Google' },
   { name: 'Applebot-Extended', company: 'Apple' },
 ];
+
+const CHECK_WEIGHTS: Record<string, number> = {
+    accessible: 20,
+    ssl: 20,
+    viewport: 10,
+    title: 10,
+    metaDescription: 10,
+    brokenLinks: 10,
+    imagesAlt: 10,
+    robotsTxt: 5,
+    sitemap: 5,
+    aiCrawlerAccess: 15,
+    antiBotAccess: 15,
+    structuredData: 10,
+    jsDependence: 10,
+    llmsTxt: 5,
+    semanticHtml: 5,
+  };
+  
+  const STATUS_VALUE: Record<Status, number> = {
+    pass: 1,
+    warning: 0.5,
+    fail: 0,
+  };
 
 interface JsonLdItem {
     '@type'?: string | string[];
@@ -480,5 +509,84 @@ export class ChecksService {
     } catch (err) {
       return { status: 'fail', reason: errText(err) };
     }
+  }
+  computeScore(checks: CheckMap): ScoreResult {
+    let earned = 0;
+    let possible = 0;
+
+    for (const [key, weight] of Object.entries(CHECK_WEIGHTS)) {
+      const check = checks[key];
+      if (!check) continue;
+      possible += weight;
+      earned += weight * (STATUS_VALUE[check.status] ?? 0);
+    }
+
+    const score = possible === 0 ? 0 : Math.round((earned / possible) * 100);
+
+    let grade: Grade = 'F';
+    if (score >= 90) grade = 'S';
+    else if (score >= 80) grade = 'A';
+    else if (score >= 70) grade = 'B';
+    else if (score >= 60) grade = 'C';
+
+    return { score, grade };
+  }
+
+  async runAllChecks(normalizedUrl: string): Promise<RunAllChecksResult> {
+    // TODO: call the SSRF guard here (ported in the next step)
+
+    const parsed = new URL(normalizedUrl);
+    const accessible = await this.checkAccessible(normalizedUrl);
+
+    const accessibleCheck = {
+      status: accessible.status,
+      statusCode: accessible.statusCode,
+      responseTimeMs: accessible.responseTimeMs,
+      ...(accessible.error ? { error: accessible.error } : {}),
+    };
+    const checks: CheckMap = { accessible: accessibleCheck };
+
+    if (accessible.html) {
+      const $ = cheerio.load(accessible.html);
+      checks.title = this.checkTitle($);
+      checks.metaDescription = this.checkMetaDescription($);
+      checks.viewport = this.checkViewport($);
+      checks.imagesAlt = this.checkImagesAlt($);
+      checks.brokenLinks = await this.checkBrokenLinks($, normalizedUrl);
+      checks.structuredData = this.checkStructuredData($);
+      checks.semanticHtml = this.checkSemanticHtml($);
+      checks.jsDependence = this.checkJsDependence($);
+    }
+
+    const robots = await this.checkRobotsTxt(normalizedUrl);
+    const sitemap = await this.checkSitemap(normalizedUrl, robots.content);
+    checks.robotsTxt = {
+      status: robots.status,
+      ...(robots.reason ? { reason: robots.reason } : {}),
+    };
+    checks.sitemap = {
+      status: sitemap.status,
+      ...(sitemap.url ? { url: sitemap.url } : {}),
+      ...(sitemap.reason ? { reason: sitemap.reason } : {}),
+    };
+
+    checks.ssl = await this.checkSSL(parsed.hostname);
+
+    checks.aiCrawlerAccess = this.checkAiCrawlerAccess(
+      normalizedUrl,
+      robots.content,
+    );
+    checks.antiBotAccess = await this.checkAntiBotAccess(normalizedUrl);
+    checks.llmsTxt = await this.checkLlmsTxt(normalizedUrl);
+
+    const { score, grade } = this.computeScore(checks);
+
+    return {
+      url: normalizedUrl,
+      checkedAt: new Date().toISOString(),
+      score,
+      grade,
+      checks,
+    };
   }
 }

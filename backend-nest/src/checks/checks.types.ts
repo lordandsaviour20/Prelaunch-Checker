@@ -102,3 +102,18 @@ export interface TitleResult {
     xRobotsTag?: string | null;
     reason?: string;
   }
+
+  export type Grade = 'S' | 'A' | 'B' | 'C' | 'F';
+
+export type CheckMap = Record<string, { status: Status }>;
+
+export interface ScoreResult {
+  score: number;
+  grade: Grade;
+}
+
+export interface RunAllChecksResult extends ScoreResult {
+  url: string;
+  checkedAt: string;
+  checks: CheckMap;
+}
