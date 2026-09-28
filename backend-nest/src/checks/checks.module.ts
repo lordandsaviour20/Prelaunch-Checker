@@ -1,9 +1,12 @@
 import { Module } from '@nestjs/common';
-import { ChecksService } from './checks.service';
 import { ChecksController } from './checks.controller';
+import { ChecksService } from './checks.service';
+import { SsrfGuardService } from './ssrf-guard.service';
+
 
 @Module({
-  providers: [ChecksService],
-  controllers: [ChecksController]
+  controllers: [ChecksController],
+  providers: [ChecksService, SsrfGuardService],
+  exports: [ChecksService, SsrfGuardService],
 })
 export class ChecksModule {}

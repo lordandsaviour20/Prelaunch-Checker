@@ -28,6 +28,7 @@ import {
   ViewportResult,
 } from './checks.types';
 import { errText, runWithConcurrencyLimit } from './checks.utils';
+import { SsrfGuardService } from './ssrf-guard.service';
 
 const MAX_LINKS_TO_CHECK = 40;
 const CONCURRENCY = 5;
@@ -72,9 +73,11 @@ interface JsonLdItem {
     '@type'?: string | string[];
   }
 
-@Injectable()
-export class ChecksService {
-  normalizeUrl(rawUrl: unknown): string | null {
+  @Injectable()
+  export class ChecksService {
+    constructor(private readonly ssrfGuard: SsrfGuardService) {}
+  
+    normalizeUrl(rawUrl: unknown): string | null {
     if (!rawUrl || typeof rawUrl !== 'string') return null;
     let url = rawUrl.trim();
     if (!url) return null;
@@ -533,8 +536,8 @@ export class ChecksService {
   }
 
   async runAllChecks(normalizedUrl: string): Promise<RunAllChecksResult> {
-    // TODO: call the SSRF guard here (ported in the next step)
-
+    await this.ssrfGuard.assertUrlIsSafe(normalizedUrl);
+    
     const parsed = new URL(normalizedUrl);
     const accessible = await this.checkAccessible(normalizedUrl);
 
