@@ -1,5 +1,6 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
 import { ChecksService } from './checks.service';
+import * as cheerio from 'cheerio';
 
 @Controller('checks')
 export class ChecksController {
@@ -11,5 +12,20 @@ export class ChecksController {
     if (!normalized) throw new BadRequestException('Invalid URL');
     const { html, ...rest } = await this.checks.checkAccessible(normalized);
     return { url: normalized, ...rest, htmlLength: html?.length ?? 0 };
+  }
+
+  @Get('html-test')
+  async htmlTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable', accessible };
+    const $ = cheerio.load(accessible.html);
+    return {
+      title: this.checks.checkTitle($),
+      metaDescription: this.checks.checkMetaDescription($),
+      viewport: this.checks.checkViewport($),
+      imagesAlt: this.checks.checkImagesAlt($),
+    };
   }
 }
