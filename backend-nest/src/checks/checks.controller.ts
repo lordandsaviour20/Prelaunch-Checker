@@ -48,4 +48,21 @@ export class ChecksController {
     const $ = cheerio.load(accessible.html);
     return this.checks.checkBrokenLinks($, normalized);
   }
+  @Get('ai-test')
+  async aiTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable', accessible };
+    const $ = cheerio.load(accessible.html);
+    const robots = await this.checks.checkRobotsTxt(normalized);
+    return {
+      aiCrawlerAccess: this.checks.checkAiCrawlerAccess(normalized, robots.content),
+      structuredData: this.checks.checkStructuredData($),
+      llmsTxt: await this.checks.checkLlmsTxt(normalized),
+      semanticHtml: this.checks.checkSemanticHtml($),
+      jsDependence: this.checks.checkJsDependence($),
+      antiBotAccess: await this.checks.checkAntiBotAccess(normalized),
+    };
+  }
 }

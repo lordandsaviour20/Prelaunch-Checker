@@ -1,17 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import type { CheerioAPI } from 'cheerio';
+import robotsParser from 'robots-parser';
 import * as tls from 'tls';
 import {
   AccessibleResult,
+  AiCrawlerAccessResult,
+  AntiBotResult,
   BrokenLinksResult,
   ImagesAltResult,
+  JsDependenceResult,
   LinkCheckResult,
+  LlmsTxtResult,
   MetaDescriptionResult,
   RobotsResult,
+  SemanticHtmlResult,
   SitemapResult,
   SslResult,
   Status,
+  StructuredDataResult,
   TitleResult,
   ViewportResult,
 } from './checks.types';
@@ -19,6 +26,22 @@ import { errText, runWithConcurrencyLimit } from './checks.utils';
 
 const MAX_LINKS_TO_CHECK = 40;
 const CONCURRENCY = 5;
+
+const AI_BOTS = [
+  { name: 'GPTBot', company: 'OpenAI' },
+  { name: 'OAI-SearchBot', company: 'OpenAI' },
+  { name: 'ChatGPT-User', company: 'OpenAI' },
+  { name: 'ClaudeBot', company: 'Anthropic' },
+  { name: 'Claude-SearchBot', company: 'Anthropic' },
+  { name: 'PerplexityBot', company: 'Perplexity' },
+  { name: 'Google-Extended', company: 'Google' },
+  { name: 'Googlebot', company: 'Google' },
+  { name: 'Applebot-Extended', company: 'Apple' },
+];
+
+interface JsonLdItem {
+    '@type'?: string | string[];
+  }
 
 @Injectable()
 export class ChecksService {
@@ -324,5 +347,138 @@ export class ChecksService {
         error: b.error,
       })),
     };
+  }
+  checkAiCrawlerAccess(
+    baseUrl: string,
+    robotsContent?: string,
+  ): AiCrawlerAccessResult {
+    if (!robotsContent) {
+      return {
+        status: 'pass',
+        allowed: AI_BOTS.length,
+        total: AI_BOTS.length,
+        blocked: [],
+      };
+    }
+
+    const robotsUrl = new URL('/robots.txt', baseUrl).toString();
+    const robots = robotsParser(robotsUrl, robotsContent);
+
+    const blocked = AI_BOTS.filter(
+      (bot) => !robots.isAllowed(baseUrl, bot.name),
+    ).map((bot) => bot.name);
+    const allowed = AI_BOTS.length - blocked.length;
+
+    let status: Status = 'pass';
+    if (blocked.length > 0 && blocked.length < AI_BOTS.length) {
+      status = 'warning';
+    }
+    if (blocked.length === AI_BOTS.length) status = 'fail';
+
+    return { status, allowed, total: AI_BOTS.length, blocked };
+  }
+
+  checkStructuredData($: CheerioAPI): StructuredDataResult {
+    const scripts = $('script[type="application/ld+json"]');
+    const types: (string | string[])[] = [];
+
+    scripts.each((i, el) => {
+      try {
+        const parsed: unknown = JSON.parse($(el).html() ?? '');
+        const items = (Array.isArray(parsed) ? parsed : [parsed]) as JsonLdItem[];
+        items.forEach((item) => {
+          if (item && item['@type']) types.push(item['@type']);
+        });
+      } catch {
+        // ignore invalid JSON-LD
+      }
+    });
+
+    if (types.length === 0) {
+      return { status: 'fail', found: 0, types: [] };
+    }
+    return { status: 'pass', found: types.length, types };
+  }
+
+  async checkLlmsTxt(baseUrl: string): Promise<LlmsTxtResult> {
+    try {
+      const llmsUrl = new URL('/llms.txt', baseUrl).toString();
+      const response = await axios.get(llmsUrl, {
+        timeout: 8000,
+        validateStatus: () => true,
+      });
+
+      if (response.status !== 200) {
+        return { status: 'fail', reason: 'llms.txt not found' };
+      }
+      const content = (response.data || '').toString().trim();
+      if (!content) {
+        return { status: 'warning', reason: 'llms.txt is empty' };
+      }
+      return { status: 'pass', url: llmsUrl };
+    } catch (err) {
+      return { status: 'fail', reason: errText(err) };
+    }
+  }
+
+  checkSemanticHtml($: CheerioAPI): SemanticHtmlResult {
+    const hasArticleOrSection = $('article, section').length > 0;
+    const h1Count = $('h1').length;
+    const hasHeadings = $('h2, h3, h4, h5, h6').length > 0;
+
+    if (hasArticleOrSection && h1Count === 1) {
+      return { status: 'pass', hasArticleOrSection, h1Count, hasHeadings };
+    }
+    if (h1Count === 0 || h1Count > 1 || !hasArticleOrSection) {
+      return { status: 'warning', hasArticleOrSection, h1Count, hasHeadings };
+    }
+    return { status: 'fail', hasArticleOrSection, h1Count, hasHeadings };
+  }
+
+  checkJsDependence($: CheerioAPI): JsDependenceResult {
+    const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+    const wordCount = bodyText ? bodyText.split(' ').length : 0;
+
+    let status: Status = 'pass';
+    if (wordCount < 50) status = 'fail';
+    else if (wordCount < 250) status = 'warning';
+
+    return { status, wordCount };
+  }
+
+  async checkAntiBotAccess(url: string): Promise<AntiBotResult> {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+        headers: { 'User-Agent': 'GPTBot/1.0' },
+      });
+
+      const statusCode = response.status;
+      const rawTag = response.headers['x-robots-tag'];
+      const xRobotsTag = rawTag ? String(rawTag) : null;
+      const blockedByTag = !!xRobotsTag && /noindex|noai/i.test(xRobotsTag);
+
+      if (statusCode === 200 && !blockedByTag) {
+        return { status: 'pass', statusCode, xRobotsTag };
+      }
+      if (
+        statusCode === 403 ||
+        statusCode === 429 ||
+        statusCode === 503 ||
+        blockedByTag
+      ) {
+        return {
+          status: 'fail',
+          statusCode,
+          xRobotsTag,
+          reason: 'AI bot user-agent appears blocked',
+        };
+      }
+      return { status: 'warning', statusCode, xRobotsTag };
+    } catch (err) {
+      return { status: 'fail', reason: errText(err) };
+    }
   }
 }

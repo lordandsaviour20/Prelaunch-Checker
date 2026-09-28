@@ -65,4 +65,40 @@ export interface TitleResult {
     broken: { url: string; statusCode: number | null; error?: string }[];
   }
 
+  export interface AiCrawlerAccessResult {
+    status: Status;
+    allowed: number;
+    total: number;
+    blocked: string[];
+  }
   
+  export interface StructuredDataResult {
+    status: Status;
+    found: number;
+    types: (string | string[])[];
+  }
+  
+  export interface LlmsTxtResult {
+    status: Status;
+    reason?: string;
+    url?: string;
+  }
+  
+  export interface SemanticHtmlResult {
+    status: Status;
+    hasArticleOrSection: boolean;
+    h1Count: number;
+    hasHeadings: boolean;
+  }
+  
+  export interface JsDependenceResult {
+    status: Status;
+    wordCount: number;
+  }
+  
+  export interface AntiBotResult {
+    status: Status;
+    statusCode?: number;
+    xRobotsTag?: string | null;
+    reason?: string;
+  }
