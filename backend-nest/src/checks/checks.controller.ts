@@ -7,6 +7,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
 import { DbService } from '../db/db.service';
+import { DiffService } from '../db/diff.service';
 
 @Controller('checks')
 export class ChecksController {
@@ -15,6 +16,7 @@ export class ChecksController {
         private readonly crawler: CrawlerService,
         private readonly crawlChecks: CrawlChecksService,
         private readonly db: DbService,
+        private readonly diff: DiffService,
         @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
       ) {}
 
@@ -119,5 +121,11 @@ export class ChecksController {
     const due = await this.db.getDueScheduledChecks();
     const notifications = await this.db.getNotificationsByUser(1);
     return { dueCount: due.length, notificationCount: notifications.length };
+  }
+  @Get('diff-test')
+  diffTest() {
+    const previous = { checks: { ssl: { status: 'pass' }, title: { status: 'fail' } } };
+    const current = { checks: { ssl: { status: 'fail' }, title: { status: 'fail' } } };
+    return this.diff.findNewlyFailedChecks(previous as never, current as never);
   }
 }

@@ -6,6 +6,7 @@ import { CrawlerService } from './crawler.service';
 import { SsrfGuardService } from './ssrf-guard.service';
 import { QueueModule } from '../queue/queue.module';
 import { DbModule } from '../db/db.module';
+import { DiffService } from '../db/diff.service';
 
 @Module({
   imports: [QueueModule, DbModule],
@@ -15,12 +16,14 @@ import { DbModule } from '../db/db.module';
     SsrfGuardService,
     CrawlerService,
     CrawlChecksService,
+    DiffService,
   ],
   exports: [
     ChecksService,
     SsrfGuardService,
     CrawlerService,
     CrawlChecksService,
+    DiffService,
   ],
 })
 export class ChecksModule {}
