@@ -6,6 +6,7 @@ import { CrawlChecksService } from './crawl-checks.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
+import { DbService } from '../db/db.service';
 
 @Controller('checks')
 export class ChecksController {
@@ -13,6 +14,7 @@ export class ChecksController {
         private readonly checks: ChecksService,
         private readonly crawler: CrawlerService,
         private readonly crawlChecks: CrawlChecksService,
+        private readonly db: DbService,
         @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
       ) {}
 
@@ -105,5 +107,10 @@ export class ChecksController {
   async queueTest(@Query('url') url: string) {
     const job = await this.queue.add('check', { url });
     return { jobId: job.id, message: 'Job added, check the terminal logs' };
+  }
+  @Get('db-test')
+  async dbTest() {
+    const user = await this.db.getUserById(1);
+    return { connected: true, sampleUser: user };
   }
 }
