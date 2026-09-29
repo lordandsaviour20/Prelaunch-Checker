@@ -8,9 +8,10 @@ import { QueueModule } from '../queue/queue.module';
 import { DbModule } from '../db/db.module';
 import { DiffService } from '../db/diff.service';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SeoAuditModule } from '../seo-audit/seo-audit.module';
 
 @Module({
-  imports: [QueueModule, DbModule, NotificationsModule],
+  imports: [QueueModule, DbModule, NotificationsModule, SeoAuditModule],
   controllers: [ChecksController],
   providers: [
     ChecksService,

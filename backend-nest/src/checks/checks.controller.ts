@@ -9,6 +9,7 @@ import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
 import { DbService } from '../db/db.service';
 import { DiffService } from '../db/diff.service';
 import { EmailService } from '../notifications/email.service';
+import { SeoAuditService } from '../seo-audit/seo-audit.service';
 
 @Controller('checks')
 export class ChecksController {
@@ -19,6 +20,7 @@ export class ChecksController {
         private readonly db: DbService,
         private readonly diff: DiffService,
         private readonly emailService: EmailService,
+        private readonly seoAudit: SeoAuditService,
         @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
       ) {}
 
@@ -138,5 +140,17 @@ export class ChecksController {
       failedChecks: ['SSL Certificate', 'Page Title'],
     });
     return { sent: 'check your inbox (and the terminal for errors)' };
+  }
+  @Get('seo-meta-test')
+  async seoMetaTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable' };
+    const $ = cheerio.load(accessible.html);
+    return {
+      metaTags: this.seoAudit.analyzeMetaTags($, normalized),
+      headings: this.seoAudit.analyzeHeadings($),
+    };
   }
 }
