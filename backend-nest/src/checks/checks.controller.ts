@@ -113,4 +113,11 @@ export class ChecksController {
     const user = await this.db.getUserById(1);
     return { connected: true, sampleUser: user };
   }
+
+  @Get('db-test2')
+  async dbTest2() {
+    const due = await this.db.getDueScheduledChecks();
+    const notifications = await this.db.getNotificationsByUser(1);
+    return { dueCount: due.length, notificationCount: notifications.length };
+  }
 }
