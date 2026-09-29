@@ -33,3 +33,12 @@ export interface ImageWithMetadata extends ImageDetail {
   statusCode?: number;
   error?: string;
 }
+
+export interface ImageAnalysisResult extends ModuleResult {
+    images: ImageDetail[];
+  }
+  
+  export interface ImageMetadataResult {
+    findings: Finding[];
+    imagesWithMetadata: ImageWithMetadata[];
+  }

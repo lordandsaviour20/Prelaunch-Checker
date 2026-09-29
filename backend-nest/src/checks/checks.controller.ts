@@ -153,4 +153,15 @@ export class ChecksController {
       headings: this.seoAudit.analyzeHeadings($),
     };
   }
+  @Get('seo-images-test')
+  async seoImagesTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable' };
+    const $ = cheerio.load(accessible.html);
+    const base = this.seoAudit.analyzeImages($, normalized);
+    const meta = await this.seoAudit.analyzeImageMetadata(base.images);
+    return { findings: [...base.findings, ...meta.findings], imageCount: base.images.length };
+  }
 }

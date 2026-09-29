@@ -1,6 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import axios from 'axios';
 import type { CheerioAPI } from 'cheerio';
-import { Finding, HeadingNode, ModuleResult, Severity } from './seo-audit.types';
+import {
+  Finding,
+  HeadingNode,
+  ImageAnalysisResult,
+  ImageDetail,
+  ImageMetadataResult,
+  ImageWithMetadata,
+  ModuleResult,
+  Severity,
+} from './seo-audit.types';
+
+const MAX_IMAGES_TO_CHECK = 30;
+const IMAGE_CONCURRENCY = 5;
 
 @Injectable()
 export class SeoAuditService {
@@ -332,4 +345,240 @@ export class SeoAuditService {
 
     return { findings, tree: headingTree };
   }
+    // ---------- 3. Image SEO Analyzer ----------
+
+    private filenameFromUrl(url: string): string {
+        try {
+          const parsed = new URL(url);
+          const parts = parsed.pathname.split('/').filter(Boolean);
+          return parts[parts.length - 1] || url;
+        } catch {
+          const parts = url.split('/').filter(Boolean);
+          return parts[parts.length - 1] || url;
+        }
+      }
+    
+      // Flags generic camera/CMS-generated filenames: IMG_2398.jpg, DSC0001.png, image1.jpg, photo (2).jpg
+      private isPoorFilename(filename: string): boolean {
+        return /^(img|dsc|image|photo|screenshot|untitled)[-_ ]?\(?\d*\)?\.[a-z]+$/i.test(
+          filename.trim(),
+        );
+      }
+    
+      private extractImageDetails($: CheerioAPI, baseUrl: string): ImageDetail[] {
+        const images: ImageDetail[] = [];
+        $('img').each((i, el) => {
+          const $el = $(el);
+          const src = $el.attr('src') || $el.attr('data-src') || '';
+          if (!src) return;
+          let absoluteUrl: string;
+          try {
+            absoluteUrl = new URL(src, baseUrl).toString();
+          } catch {
+            absoluteUrl = src;
+          }
+          images.push({
+            src: absoluteUrl,
+            alt: $el.attr('alt'),
+            width: $el.attr('width'),
+            height: $el.attr('height'),
+            loading: $el.attr('loading'),
+          });
+        });
+        return images;
+      }
+    
+      // Synchronous part - everything readable straight from the HTML, no network calls
+      analyzeImages($: CheerioAPI, pageUrl: string): ImageAnalysisResult {
+        const findings: Finding[] = [];
+        const images = this.extractImageDetails($, pageUrl);
+        const total = images.length;
+    
+        if (total === 0) {
+          findings.push(
+            this.finding('imagesPresent', 'Images Found', 'passed', 'No images found on this page.'),
+          );
+          return { findings, images: [] };
+        }
+    
+        const missingAlt = images.filter((img) => img.alt === undefined || img.alt === null);
+        const emptyAlt = images.filter(
+          (img) => img.alt !== undefined && img.alt !== null && img.alt.trim() === '',
+        );
+        const longAlt = images.filter((img) => img.alt && img.alt.length > 125);
+        const missingDimensions = images.filter((img) => !img.width || !img.height);
+        const noLazyLoad = images.filter((img, idx) => idx > 2 && img.loading !== 'lazy'); // first few assumed above-the-fold
+        const poorFilenames = images.filter((img) =>
+          this.isPoorFilename(this.filenameFromUrl(img.src)),
+        );
+    
+        findings.push(
+          missingAlt.length > 0
+            ? this.finding(
+                'missingAlt',
+                'Missing ALT Attributes',
+                'critical',
+                `${missingAlt.length} of ${total} images have no alt attribute at all.`,
+                'Add descriptive alt text to every meaningful image.',
+              )
+            : this.finding('missingAlt', 'Missing ALT Attributes', 'passed', 'All images have an alt attribute.'),
+        );
+    
+        findings.push(
+          emptyAlt.length > 0
+            ? this.finding(
+                'emptyAlt',
+                'Empty ALT Text',
+                'warning',
+                `${emptyAlt.length} image(s) have alt="" (fine only for purely decorative images).`,
+                'Confirm these images are decorative; otherwise add descriptive alt text.',
+              )
+            : this.finding('emptyAlt', 'Empty ALT Text', 'passed', 'No empty alt attributes found.'),
+        );
+    
+        findings.push(
+          longAlt.length > 0
+            ? this.finding(
+                'longAlt',
+                'Excessively Long ALT Text',
+                'warning',
+                `${longAlt.length} image(s) have alt text over 125 characters.`,
+                'Keep alt text concise and descriptive - aim under ~125 characters.',
+              )
+            : this.finding('longAlt', 'Excessively Long ALT Text', 'passed', 'Alt text lengths look reasonable.'),
+        );
+    
+        findings.push(
+          missingDimensions.length > 0
+            ? this.finding(
+                'missingDimensions',
+                'Width/Height Attributes',
+                'warning',
+                `${missingDimensions.length} of ${total} images are missing width/height attributes.`,
+                'Add explicit width and height attributes to prevent layout shift (CLS) while images load.',
+              )
+            : this.finding(
+                'missingDimensions',
+                'Width/Height Attributes',
+                'passed',
+                'All images specify width and height.',
+              ),
+        );
+    
+        findings.push(
+          noLazyLoad.length > 0
+            ? this.finding(
+                'lazyLoading',
+                'Lazy Loading',
+                'warning',
+                `${noLazyLoad.length} below-the-fold image(s) are not using loading="lazy".`,
+                'Add loading="lazy" to images that are not immediately visible on page load.',
+              )
+            : this.finding('lazyLoading', 'Lazy Loading', 'passed', 'Lazy loading looks appropriately applied.'),
+        );
+    
+        findings.push(
+          poorFilenames.length > 0
+            ? this.finding(
+                'filenameQuality',
+                'Filename Quality',
+                'warning',
+                `${poorFilenames.length} image(s) use generic filenames (e.g. "${this.filenameFromUrl(poorFilenames[0].src)}").`,
+                'Rename image files descriptively - e.g. "blue-sapphire-ring.jpg" instead of "IMG_2398.jpg".',
+              )
+            : this.finding('filenameQuality', 'Filename Quality', 'passed', 'Image filenames look descriptive.'),
+        );
+    
+        return { findings, images };
+      }
+    
+      // Async part - file size + format, requires a HEAD request per image.
+      // Capped and concurrency-limited so a page with hundreds of images can't
+      // turn this into an uncontrolled crawl of someone's image CDN.
+      async analyzeImageMetadata(images: ImageDetail[]): Promise<ImageMetadataResult> {
+        const capped = images.slice(0, MAX_IMAGES_TO_CHECK);
+        const findings: Finding[] = [];
+    
+        if (capped.length === 0) {
+          return { findings, imagesWithMetadata: [] };
+        }
+    
+        const results = await this.runWithConcurrencyLimit<ImageDetail, ImageWithMetadata>(
+          capped,
+          IMAGE_CONCURRENCY,
+          async (img) => {
+            try {
+              const response = await axios.head(img.src, {
+                timeout: 8000,
+                validateStatus: () => true,
+              });
+              const sizeBytes = parseInt(String(response.headers['content-length']), 10) || null;
+              const contentType = (response.headers['content-type'] as string) || null;
+              return { ...img, sizeBytes, contentType, statusCode: response.status };
+            } catch (err) {
+              return {
+                ...img,
+                sizeBytes: null,
+                contentType: null,
+                error: err instanceof Error ? err.message : String(err),
+              };
+            }
+          },
+        );
+    
+        const oversized = results.filter((img) => img.sizeBytes && img.sizeBytes > 300 * 1024); // > 300KB
+        const modernFormats = ['image/webp', 'image/avif'];
+        const legacyFormat = results.filter(
+          (img) =>
+            img.contentType &&
+            !modernFormats.includes(img.contentType) &&
+            /image\/(jpeg|png)/i.test(img.contentType),
+        );
+    
+        findings.push(
+          oversized.length > 0
+            ? this.finding(
+                'imageFileSize',
+                'Image File Size',
+                'warning',
+                `${oversized.length} image(s) are over 300KB.`,
+                'Compress large images or serve responsively-sized versions.',
+              )
+            : this.finding('imageFileSize', 'Image File Size', 'passed', 'No excessively large images detected.'),
+        );
+    
+        findings.push(
+          legacyFormat.length > 0
+            ? this.finding(
+                'imageFormat',
+                'Image Format',
+                'warning',
+                `${legacyFormat.length} image(s) use JPEG/PNG instead of a modern format.`,
+                'Consider serving images as WebP or AVIF for smaller file sizes.',
+              )
+            : this.finding('imageFormat', 'Image Format', 'passed', 'Images use modern or appropriately chosen formats.'),
+        );
+    
+        return { findings, imagesWithMetadata: results };
+      }
+    
+      // Small local concurrency-limited runner (mirrors the one in ChecksService,
+      // kept local here so SeoAuditService doesn't depend on ChecksService).
+      private async runWithConcurrencyLimit<T, R>(
+        items: T[],
+        limit: number,
+        worker: (item: T) => Promise<R>,
+      ): Promise<R[]> {
+        const results: R[] = [];
+        let index = 0;
+        async function next() {
+          while (index < items.length) {
+            const current = index++;
+            results[current] = await worker(items[current]);
+          }
+        }
+        const workers = Array.from({ length: Math.min(limit, items.length) }, next);
+        await Promise.all(workers);
+        return results;
+      }
 }
