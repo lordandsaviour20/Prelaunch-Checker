@@ -186,4 +186,11 @@ export class ChecksController {
 
     return { url: urlFindings, canonical, indexability };
   }
+
+  @Get('seo-audit-test')
+  async seoAuditTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    return this.seoAudit.runSeoAudit(normalized);
+  }
 }

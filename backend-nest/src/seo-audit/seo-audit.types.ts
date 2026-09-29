@@ -63,3 +63,36 @@ export interface ImageAnalysisResult extends ModuleResult {
     verdict: 'Indexable' | 'Not indexable' | 'Uncertain';
     reasons: string[];
   }
+
+  export interface ModuleScore {
+    key: string;
+    label: string;
+    score: number;
+    weight: number;
+    findingCount: number;
+  }
+  
+  export interface AuditSummary {
+    critical: number;
+    warning: number;
+    passed: number;
+    total: number;
+  }
+  
+  export interface ScoredModules {
+    score: number;
+    overallCapped: boolean;
+    summary: AuditSummary;
+    moduleScores: ModuleScore[];
+  }
+  
+  export interface SeoAuditReport extends ScoredModules {
+    url: string;
+    checkedAt: string;
+    modules: Record<string, ModuleResult>;
+    internalLinks?: string[];
+  }
+  
+  export interface RunSeoAuditOptions {
+    rootHostname?: string;
+  }

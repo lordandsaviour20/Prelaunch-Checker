@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import {
+    AuditSummary,
     CanonicalResult,
     Finding,
     HeadingNode,
@@ -12,11 +14,38 @@ import {
     IndexabilityInput,
     IndexabilityResult,
     ModuleResult,
+    ModuleScore,
+    RunSeoAuditOptions,
+    ScoredModules,
+    SeoAuditReport,
     Severity,
   } from './seo-audit.types';
 
 const MAX_IMAGES_TO_CHECK = 30;
 const IMAGE_CONCURRENCY = 5;
+
+const MODULE_LABELS: Record<string, string> = {
+    metaTags: 'Meta Tags',
+    headings: 'Heading Structure',
+    images: 'Images',
+    url: 'URL Structure',
+    canonical: 'Canonical URL',
+    indexability: 'Indexability',
+  };
+  
+  // Module-level weights (sum to 100). Indexability weighted highest - a page
+  // that can't be indexed makes every other signal moot. URL structure lowest -
+  // real but rarely make-or-break on its own.
+  const MODULE_WEIGHTS: Record<string, number> = {
+    indexability: 25,
+    metaTags: 20,
+    canonical: 15,
+    headings: 15,
+    images: 15,
+    url: 10,
+  };
+  
+  const SEVERITY_VALUE: Record<Severity, number> = { passed: 1, warning: 0.5, critical: 0 };
 
 @Injectable()
 export class SeoAuditService {
@@ -926,5 +955,202 @@ export class SeoAuditService {
     ];
 
     return { findings, verdict, reasons };
+  }
+    // ---------- Scoring & report assembly ----------
+
+  // A module's own sub-score (0-100), from only its own findings - this is
+  // what stops a finding-heavy module (Meta Tags: 8 findings) from drowning
+  // out a finding-light one (Indexability: 1 finding) before weighting.
+  private computeModuleSubScore(findings: Finding[]): number | null {
+    if (!findings || findings.length === 0) return null;
+    let earned = 0;
+    for (const f of findings) {
+      earned += SEVERITY_VALUE[f.severity] ?? 0;
+    }
+    return Math.round((earned / findings.length) * 100);
+  }
+
+  // Shared by both buildAuditReport (single page) and runSeoAuditCrawl
+  // (aggregated), so the two scoring paths can never silently diverge.
+  scoreModules(moduleSummaries: Record<string, ModuleResult>): ScoredModules {
+    let critical = 0;
+    let warning = 0;
+    let passed = 0;
+    const moduleScores: ModuleScore[] = [];
+
+    for (const [key, mod] of Object.entries(moduleSummaries)) {
+      const findings = mod.findings || [];
+      for (const f of findings) {
+        if (f.severity === 'critical') critical++;
+        else if (f.severity === 'warning') warning++;
+        else passed++;
+      }
+
+      const subScore = this.computeModuleSubScore(findings);
+      if (subScore !== null) {
+        moduleScores.push({
+          key,
+          label: mod.label || MODULE_LABELS[key] || key,
+          score: subScore,
+          weight: MODULE_WEIGHTS[key] ?? 0,
+          findingCount: findings.length,
+        });
+      }
+    }
+
+    const totalWeight = moduleScores.reduce((sum, m) => sum + m.weight, 0);
+    let score =
+      totalWeight === 0
+        ? 0
+        : Math.round(moduleScores.reduce((sum, m) => sum + m.score * m.weight, 0) / totalWeight);
+
+    // Hard cap: any critical Indexability finding caps the overall score,
+    // regardless of how well everything else scores - a page that can't be
+    // indexed shouldn't be able to "average its way" to a good grade.
+    let overallCapped = false;
+    const indexabilityCritical = moduleSummaries.indexability?.findings?.some(
+      (f) => f.severity === 'critical',
+    );
+    if (indexabilityCritical && score > 40) {
+      score = 40;
+      overallCapped = true;
+    }
+
+    const total = critical + warning + passed;
+    const summary: AuditSummary = { critical, warning, passed, total };
+    return { score, overallCapped, summary, moduleScores };
+  }
+
+  private buildAuditReport(pageUrl: string, modules: Record<string, ModuleResult>): SeoAuditReport {
+    const { score, overallCapped, summary, moduleScores } = this.scoreModules(modules);
+    return {
+      url: pageUrl,
+      checkedAt: new Date().toISOString(),
+      score,
+      overallCapped,
+      summary,
+      moduleScores,
+      modules,
+    };
+  }
+
+  isInternalLink(linkUrl: string, rootHostname: string): boolean {
+    try {
+      const parsed = new URL(linkUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+      return parsed.hostname === rootHostname || parsed.hostname.endsWith('.' + rootHostname);
+    } catch {
+      return false;
+    }
+  }
+
+  extractInternalLinksFromHtml($: CheerioAPI, baseUrl: string, rootHostname: string): string[] {
+    const hrefs = new Set<string>();
+    $('a[href]').each((i, el) => {
+      const href = $(el).attr('href');
+      if (!href) return;
+      if (
+        href.startsWith('#') ||
+        href.startsWith('mailto:') ||
+        href.startsWith('tel:') ||
+        href.startsWith('javascript:')
+      ) {
+        return;
+      }
+      try {
+        const absolute = new URL(href, baseUrl).toString();
+        const clean = absolute.split('#')[0];
+        if (this.isInternalLink(clean, rootHostname)) {
+          hrefs.add(clean);
+        }
+      } catch {
+        // Malformed href, skip it
+      }
+    });
+    return Array.from(hrefs);
+  }
+
+  async runSeoAudit(pageUrl: string, options: RunSeoAuditOptions = {}): Promise<SeoAuditReport> {
+    const { rootHostname } = options;
+
+    let response;
+    try {
+      response = await axios.get(pageUrl, {
+        timeout: 10000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+      });
+    } catch (err) {
+      const modules: Record<string, ModuleResult> = {
+        indexability: {
+          findings: [
+            this.finding(
+              'pageAccessible',
+              'Page Accessible',
+              'critical',
+              `Could not load this page: ${err instanceof Error ? err.message : String(err)}`,
+              'Check that the site is reachable and serves a complete, valid SSL certificate chain (including intermediate certificates).',
+            ),
+          ],
+        },
+      };
+      const report = this.buildAuditReport(pageUrl, modules);
+      return rootHostname ? { ...report, internalLinks: [] } : report;
+    }
+
+    const statusCode = response.status;
+    const html = typeof response.data === 'string' ? response.data : '';
+    const xRobotsTagHeader = (response.headers['x-robots-tag'] as string) || null;
+
+    const modules: Record<string, ModuleResult> = {};
+
+    if (!html) {
+      modules.indexability = await this.analyzeIndexability({
+        pageUrl,
+        statusCode,
+        robotsMetaContent: null,
+        xRobotsTagHeader,
+        canonicalUrl: null,
+        isSelfReferencing: null,
+      });
+      const report = this.buildAuditReport(pageUrl, modules);
+      return rootHostname ? { ...report, internalLinks: [] } : report;
+    }
+
+    const $ = cheerio.load(html);
+
+    modules.metaTags = { findings: this.analyzeMetaTags($, pageUrl) };
+    modules.headings = this.analyzeHeadings($);
+
+    const imageBase = this.analyzeImages($, pageUrl);
+    const imageMeta = await this.analyzeImageMetadata(imageBase.images);
+    modules.images = { findings: [...imageBase.findings, ...imageMeta.findings] };
+
+    modules.url = { findings: this.analyzeUrl(pageUrl) };
+
+    const canonicalResult = await this.analyzeCanonical($, pageUrl);
+    modules.canonical = canonicalResult;
+
+    const robotsMetaContent = $('meta[name="robots"]').attr('content') || null;
+    modules.indexability = await this.analyzeIndexability({
+      $,
+      pageUrl,
+      statusCode,
+      robotsMetaContent,
+      xRobotsTagHeader,
+      canonicalUrl: canonicalResult.canonicalUrl,
+      isSelfReferencing: canonicalResult.isSelfReferencing,
+    });
+
+    const report = this.buildAuditReport(pageUrl, modules);
+
+    // Only extract links in crawl mode - a single-page audit has no use for them,
+    // and this reuses the $ already loaded above rather than re-fetching.
+    if (rootHostname) {
+      const internalLinks = this.extractInternalLinksFromHtml($, pageUrl, rootHostname);
+      return { ...report, internalLinks };
+    }
+
+    return report;
   }
 }
