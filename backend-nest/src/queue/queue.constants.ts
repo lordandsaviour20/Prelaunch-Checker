@@ -1,0 +1,1 @@
+export const SITE_CHECKS_QUEUE = 'site-checks';

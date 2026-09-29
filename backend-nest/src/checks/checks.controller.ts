@@ -3,6 +3,9 @@ import { ChecksService } from './checks.service';
 import * as cheerio from 'cheerio';
 import { CrawlerService } from './crawler.service';
 import { CrawlChecksService } from './crawl-checks.service';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
 
 @Controller('checks')
 export class ChecksController {
@@ -10,6 +13,7 @@ export class ChecksController {
         private readonly checks: ChecksService,
         private readonly crawler: CrawlerService,
         private readonly crawlChecks: CrawlChecksService,
+        @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
       ) {}
 
   @Get('test')
@@ -96,5 +100,10 @@ export class ChecksController {
     if (!normalized) throw new BadRequestException('Invalid URL');
     const maxPages = Math.min(Number(max) || 3, 10);
     return this.crawlChecks.runCrawlChecks(normalized, maxPages);
+  }
+  @Get('queue-test')
+  async queueTest(@Query('url') url: string) {
+    const job = await this.queue.add('check', { url });
+    return { jobId: job.id, message: 'Job added, check the terminal logs' };
   }
 }
