@@ -7,9 +7,10 @@ import { SsrfGuardService } from './ssrf-guard.service';
 import { QueueModule } from '../queue/queue.module';
 import { DbModule } from '../db/db.module';
 import { DiffService } from '../db/diff.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [QueueModule, DbModule],
+  imports: [QueueModule, DbModule, NotificationsModule],
   controllers: [ChecksController],
   providers: [
     ChecksService,

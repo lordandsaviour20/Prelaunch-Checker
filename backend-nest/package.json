@@ -35,6 +35,7 @@
     "mysql2": "^3.24.4",
     "playwright": "^1.63.0",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.30.0",
     "robots-parser": "^3.0.1",
     "rxjs": "^7.8.1"
   },

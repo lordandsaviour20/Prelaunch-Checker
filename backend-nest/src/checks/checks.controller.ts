@@ -8,6 +8,7 @@ import { Queue } from 'bullmq';
 import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
 import { DbService } from '../db/db.service';
 import { DiffService } from '../db/diff.service';
+import { EmailService } from '../notifications/email.service';
 
 @Controller('checks')
 export class ChecksController {
@@ -17,6 +18,7 @@ export class ChecksController {
         private readonly crawlChecks: CrawlChecksService,
         private readonly db: DbService,
         private readonly diff: DiffService,
+        private readonly emailService: EmailService,
         @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
       ) {}
 
@@ -127,5 +129,14 @@ export class ChecksController {
     const previous = { checks: { ssl: { status: 'pass' }, title: { status: 'fail' } } };
     const current = { checks: { ssl: { status: 'fail' }, title: { status: 'fail' } } };
     return this.diff.findNewlyFailedChecks(previous as never, current as never);
+  }
+
+  @Get('email-test')
+  async emailTest() {
+    await this.emailService.sendAlertEmail('your-email@example.com', {
+      url: 'https://example.com',
+      failedChecks: ['SSL Certificate', 'Page Title'],
+    });
+    return { sent: 'check your inbox (and the terminal for errors)' };
   }
 }
