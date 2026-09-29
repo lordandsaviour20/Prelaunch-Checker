@@ -164,4 +164,26 @@ export class ChecksController {
     const meta = await this.seoAudit.analyzeImageMetadata(base.images);
     return { findings: [...base.findings, ...meta.findings], imageCount: base.images.length };
   }
+  @Get('seo-url-test')
+  async seoUrlTest(@Query('url') url: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const accessible = await this.checks.checkAccessible(normalized);
+    if (!accessible.html) return { error: 'Page not reachable' };
+    const $ = cheerio.load(accessible.html);
+
+    const urlFindings = this.seoAudit.analyzeUrl(normalized);
+    const canonical = await this.seoAudit.analyzeCanonical($, normalized);
+    const robotsMetaContent = $('meta[name="robots"]').attr('content') || null;
+    const indexability = await this.seoAudit.analyzeIndexability({
+      pageUrl: normalized,
+      statusCode: accessible.statusCode,
+      robotsMetaContent,
+      xRobotsTagHeader: null,
+      canonicalUrl: canonical.canonicalUrl,
+      isSelfReferencing: canonical.isSelfReferencing,
+    });
+
+    return { url: urlFindings, canonical, indexability };
+  }
 }

@@ -1,3 +1,5 @@
+import type { CheerioAPI } from 'cheerio';
+
 export type Severity = 'passed' | 'warning' | 'critical';
 
 export interface Finding {
@@ -41,4 +43,23 @@ export interface ImageAnalysisResult extends ModuleResult {
   export interface ImageMetadataResult {
     findings: Finding[];
     imagesWithMetadata: ImageWithMetadata[];
+  }
+  export interface CanonicalResult extends ModuleResult {
+    canonicalUrl: string | null;
+    isSelfReferencing: boolean | null;
+  }
+  
+  export interface IndexabilityInput {
+    $?: CheerioAPI;
+    pageUrl: string;
+    statusCode: number | null;
+    robotsMetaContent: string | null;
+    xRobotsTagHeader: string | null;
+    canonicalUrl: string | null;
+    isSelfReferencing: boolean | null;
+  }
+  
+  export interface IndexabilityResult extends ModuleResult {
+    verdict: 'Indexable' | 'Not indexable' | 'Uncertain';
+    reasons: string[];
   }

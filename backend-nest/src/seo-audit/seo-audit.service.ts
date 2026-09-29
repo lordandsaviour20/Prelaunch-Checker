@@ -2,15 +2,18 @@ import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import type { CheerioAPI } from 'cheerio';
 import {
-  Finding,
-  HeadingNode,
-  ImageAnalysisResult,
-  ImageDetail,
-  ImageMetadataResult,
-  ImageWithMetadata,
-  ModuleResult,
-  Severity,
-} from './seo-audit.types';
+    CanonicalResult,
+    Finding,
+    HeadingNode,
+    ImageAnalysisResult,
+    ImageDetail,
+    ImageMetadataResult,
+    ImageWithMetadata,
+    IndexabilityInput,
+    IndexabilityResult,
+    ModuleResult,
+    Severity,
+  } from './seo-audit.types';
 
 const MAX_IMAGES_TO_CHECK = 30;
 const IMAGE_CONCURRENCY = 5;
@@ -581,4 +584,347 @@ export class SeoAuditService {
         await Promise.all(workers);
         return results;
       }
+
+        // ---------- 4. URL SEO Analyzer ----------
+
+  analyzeUrl(pageUrl: string): Finding[] {
+    const findings: Finding[] = [];
+    const parsed = new URL(pageUrl);
+
+    findings.push(
+      parsed.protocol === 'https:'
+        ? this.finding('urlHttps', 'HTTPS', 'passed', 'URL uses HTTPS.')
+        : this.finding(
+            'urlHttps',
+            'HTTPS',
+            'critical',
+            `URL uses ${parsed.protocol.replace(':', '')} instead of HTTPS.`,
+            'Serve the page over HTTPS.',
+          ),
+    );
+
+    findings.push(
+      pageUrl.length > 100
+        ? this.finding(
+            'urlLength',
+            'URL Length',
+            'warning',
+            `URL is ${pageUrl.length} characters.`,
+            'Shorten the URL where possible - aim under roughly 75-100 characters.',
+          )
+        : this.finding('urlLength', 'URL Length', 'passed', `URL is ${pageUrl.length} characters.`),
+    );
+
+    findings.push(
+      /[A-Z]/.test(parsed.pathname)
+        ? this.finding(
+            'urlUppercase',
+            'Uppercase Characters',
+            'warning',
+            'URL path contains uppercase characters.',
+            'Use lowercase-only URLs to avoid duplicate-content issues from case-sensitive servers.',
+          )
+        : this.finding('urlUppercase', 'Uppercase Characters', 'passed', 'URL path is lowercase.'),
+    );
+
+    findings.push(
+      /\s|%20/.test(pageUrl)
+        ? this.finding(
+            'urlSpaces',
+            'Spaces in URL',
+            'critical',
+            'URL contains spaces (or encoded spaces).',
+            'Remove spaces from the URL path.',
+          )
+        : this.finding('urlSpaces', 'Spaces in URL', 'passed', 'No spaces found in URL.'),
+    );
+
+    findings.push(
+      /[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]/.test(pageUrl)
+        ? this.finding(
+            'urlSpecialChars',
+            'Special Characters',
+            'warning',
+            'URL contains unusual special characters.',
+            'Stick to letters, numbers, and hyphens in URL paths.',
+          )
+        : this.finding('urlSpecialChars', 'Special Characters', 'passed', 'No unusual special characters found.'),
+    );
+
+    const paramCount = Array.from(parsed.searchParams.keys()).length;
+    findings.push(
+      paramCount > 3
+        ? this.finding(
+            'urlQueryParams',
+            'Query Parameters',
+            'warning',
+            `URL has ${paramCount} query parameters.`,
+            'Excessive query parameters can create duplicate-content and crawl-budget issues - consider clean paths instead.',
+          )
+        : this.finding('urlQueryParams', 'Query Parameters', 'passed', `URL has ${paramCount} query parameter(s).`),
+    );
+
+    findings.push(
+      /_/.test(parsed.pathname)
+        ? this.finding(
+            'urlUnderscores',
+            'Underscores vs Hyphens',
+            'warning',
+            'URL path uses underscores.',
+            'Use hyphens instead of underscores as word separators - search engines treat hyphens as word breaks.',
+          )
+        : this.finding('urlUnderscores', 'Underscores vs Hyphens', 'passed', 'No underscores found in URL path.'),
+    );
+
+    // Trailing-slash and readability are single-URL observations, not
+    // pass/fail judgments - true "consistency" needs multiple URLs to assess,
+    // which is out of scope for a single-page check.
+    const hasTrailingSlash = parsed.pathname.length > 1 && parsed.pathname.endsWith('/');
+    findings.push(
+      this.finding(
+        'urlTrailingSlash',
+        'Trailing Slash',
+        'passed',
+        hasTrailingSlash
+          ? 'URL path ends with a trailing slash.'
+          : 'URL path has no trailing slash.',
+        'Ensure this is applied consistently site-wide (either always or never) to avoid duplicate-content issues.',
+      ),
+    );
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const looksLikeId = segments.some((seg) => /^[0-9a-f]{8,}$/i.test(seg) || /^\d+$/.test(seg));
+    findings.push(
+      looksLikeId
+        ? this.finding(
+            'urlReadability',
+            'Readability',
+            'warning',
+            'URL path contains numeric IDs or hash-like segments.',
+            'Consider using descriptive slugs (e.g. /products/blue-sapphire-ring) instead of raw IDs where possible.',
+          )
+        : this.finding('urlReadability', 'Readability', 'passed', 'URL path looks reasonably descriptive.'),
+    );
+
+    return findings;
+  }
+
+  // ---------- 5. Canonical URL Checker ----------
+
+  async analyzeCanonical($: CheerioAPI, pageUrl: string): Promise<CanonicalResult> {
+    const findings: Finding[] = [];
+    const canonicalTags = $('link[rel="canonical"]');
+    const count = canonicalTags.length;
+
+    if (count === 0) {
+      findings.push(
+        this.finding(
+          'canonicalExists',
+          'Canonical Tag Exists',
+          'warning',
+          'No canonical link tag found.',
+          'Add a <link rel="canonical"> tag to avoid duplicate-content issues.',
+        ),
+      );
+      return { findings, canonicalUrl: null, isSelfReferencing: null };
+    }
+
+    if (count > 1) {
+      findings.push(
+        this.finding(
+          'canonicalExists',
+          'Canonical Tag Exists',
+          'critical',
+          `${count} canonical tags found (should be exactly one).`,
+          'Remove duplicate canonical tags - only one should be present.',
+        ),
+      );
+      // Still evaluate the first one found, since that's what browsers/crawlers will typically honor
+    } else {
+      findings.push(
+        this.finding('canonicalExists', 'Canonical Tag Exists', 'passed', 'Exactly one canonical tag found.'),
+      );
+    }
+
+    const rawHref = canonicalTags.first().attr('href') || '';
+    let canonicalUrl: string;
+    try {
+      canonicalUrl = new URL(rawHref, pageUrl).toString();
+    } catch {
+      findings.push(
+        this.finding(
+          'canonicalAbsolute',
+          'Absolute URL',
+          'critical',
+          `Canonical href "${rawHref}" is not a valid URL.`,
+          'Use a full, valid absolute URL in the canonical tag.',
+        ),
+      );
+      return { findings, canonicalUrl: null, isSelfReferencing: null };
+    }
+
+    findings.push(
+      /^https?:\/\//i.test(rawHref)
+        ? this.finding('canonicalAbsolute', 'Absolute URL', 'passed', 'Canonical URL is absolute.')
+        : this.finding(
+            'canonicalAbsolute',
+            'Absolute URL',
+            'warning',
+            `Canonical href "${rawHref}" is relative.`,
+            'Use an absolute URL (including https://) in the canonical tag - relative canonicals are handled inconsistently by crawlers.',
+          ),
+    );
+
+    const canonicalParsed = new URL(canonicalUrl);
+    findings.push(
+      canonicalParsed.protocol === 'https:'
+        ? this.finding('canonicalHttps', 'Canonical Uses HTTPS', 'passed', 'Canonical URL uses HTTPS.')
+        : this.finding(
+            'canonicalHttps',
+            'Canonical Uses HTTPS',
+            'warning',
+            'Canonical URL does not use HTTPS.',
+            'Point the canonical tag at the HTTPS version of the URL.',
+          ),
+    );
+
+    const normalize = (u: string) => u.replace(/\/$/, '').toLowerCase();
+    const isSelfReferencing = normalize(canonicalUrl) === normalize(pageUrl);
+    findings.push(
+      isSelfReferencing
+        ? this.finding(
+            'canonicalSelfRef',
+            'Self-Referencing',
+            'passed',
+            'Canonical URL matches this page (self-referencing).',
+          )
+        : this.finding(
+            'canonicalSelfRef',
+            'Self-Referencing',
+            'warning',
+            `Canonical points to a different URL: ${canonicalUrl}`,
+            'Confirm this is intentional - if this page is not a duplicate of another, its canonical should point to itself.',
+          ),
+    );
+
+    // Check the canonical target is actually reachable (not itself broken/redirecting into an error)
+    try {
+      const response = await axios.get(canonicalUrl, {
+        timeout: 8000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+      });
+      if (response.status >= 400) {
+        findings.push(
+          this.finding(
+            'canonicalTargetStatus',
+            'Canonical Target Availability',
+            'critical',
+            `Canonical target returned status ${response.status}.`,
+            'Fix the canonical target so it resolves successfully - a broken canonical target undermines the tag entirely.',
+          ),
+        );
+      } else if (response.status >= 300) {
+        findings.push(
+          this.finding(
+            'canonicalTargetStatus',
+            'Canonical Target Availability',
+            'warning',
+            `Canonical target redirects (status ${response.status}).`,
+            'Point the canonical directly at the final URL rather than one that redirects.',
+          ),
+        );
+      } else {
+        findings.push(
+          this.finding(
+            'canonicalTargetStatus',
+            'Canonical Target Availability',
+            'passed',
+            'Canonical target is reachable and returns a success status.',
+          ),
+        );
+      }
+    } catch (err) {
+      findings.push(
+        this.finding(
+          'canonicalTargetStatus',
+          'Canonical Target Availability',
+          'critical',
+          `Could not reach canonical target: ${err instanceof Error ? err.message : String(err)}`,
+          'Ensure the canonical URL is reachable.',
+        ),
+      );
+    }
+
+    return { findings, canonicalUrl, isSelfReferencing };
+  }
+
+  // ---------- Indexability Checker ----------
+  // Takes already-computed signals from other analyzers rather than re-deriving
+  // them, so this verdict can never quietly disagree with the canonical/meta
+  // findings sitting right next to it in the report.
+
+  async analyzeIndexability(input: IndexabilityInput): Promise<IndexabilityResult> {
+    const { pageUrl, statusCode, robotsMetaContent, xRobotsTagHeader, canonicalUrl, isSelfReferencing } = input;
+    const reasons: string[] = [];
+    let verdict: IndexabilityResult['verdict'] = 'Indexable';
+
+    if (statusCode && statusCode >= 400) {
+      verdict = 'Not indexable';
+      reasons.push(`Page returned HTTP status ${statusCode}.`);
+    }
+
+    if (robotsMetaContent && /noindex/i.test(robotsMetaContent)) {
+      verdict = 'Not indexable';
+      reasons.push(`Robots meta tag contains "noindex" (content="${robotsMetaContent}").`);
+    }
+
+    if (xRobotsTagHeader && /noindex/i.test(xRobotsTagHeader)) {
+      verdict = 'Not indexable';
+      reasons.push(`X-Robots-Tag response header contains "noindex" (value: "${xRobotsTagHeader}").`);
+    }
+
+    try {
+      const robotsUrl = new URL('/robots.txt', pageUrl).toString();
+      const response = await axios.get(robotsUrl, { timeout: 8000, validateStatus: () => true });
+      if (response.status === 200) {
+        const content = (response.data || '').toString();
+        const disallowsAll = /User-agent:\s*\*\s*\n\s*Disallow:\s*\/\s*$/im.test(content);
+        if (disallowsAll) {
+          verdict = 'Not indexable';
+          reasons.push('robots.txt disallows all crawling for this path.');
+        }
+      }
+    } catch {
+      reasons.push('Could not verify robots.txt (request failed) - crawl restrictions are uncertain.');
+      if (verdict === 'Indexable') verdict = 'Uncertain';
+    }
+
+    if (canonicalUrl && isSelfReferencing === false) {
+      reasons.push(
+        `Canonical points to a different URL (${canonicalUrl}) - search engines may index that URL instead of this one.`,
+      );
+      if (verdict === 'Indexable') verdict = 'Uncertain';
+    }
+
+    if (reasons.length === 0) {
+      reasons.push(
+        'No indexing restrictions detected in robots.txt, robots meta tag, X-Robots-Tag header, canonical, or HTTP status.',
+      );
+    }
+
+    const severity: Severity = verdict === 'Indexable' ? 'passed' : verdict === 'Uncertain' ? 'warning' : 'critical';
+
+    const findings: Finding[] = [
+      this.finding(
+        'indexability',
+        'Indexability',
+        severity,
+        `${verdict}. ${reasons.join(' ')}`,
+        verdict !== 'Indexable' ? 'Review the listed signal(s) if you want this page to appear in search results.' : null,
+      ),
+    ];
+
+    return { findings, verdict, reasons };
+  }
 }
