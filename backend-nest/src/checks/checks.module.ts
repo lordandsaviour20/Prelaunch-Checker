@@ -10,6 +10,7 @@ import { DiffService } from '../db/diff.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SeoAuditModule } from '../seo-audit/seo-audit.module';
 import { ChecksProcessor } from '../queue/checks.processor';
+import { SchedulerService } from '../queue/scheduler.service';
 
 @Module({
   imports: [QueueModule, DbModule, NotificationsModule, SeoAuditModule],
@@ -21,6 +22,7 @@ import { ChecksProcessor } from '../queue/checks.processor';
     CrawlChecksService,
     DiffService,
     ChecksProcessor,
+    SchedulerService,
   ],
   exports: [
     ChecksService,
