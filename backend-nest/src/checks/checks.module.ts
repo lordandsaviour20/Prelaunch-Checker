@@ -11,9 +11,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { SeoAuditModule } from '../seo-audit/seo-audit.module';
 import { ChecksProcessor } from '../queue/checks.processor';
 import { SchedulerService } from '../queue/scheduler.service';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [QueueModule, DbModule, NotificationsModule, SeoAuditModule],
+  imports: [QueueModule, DbModule, NotificationsModule, SeoAuditModule, AuthModule],
   controllers: [ChecksController],
   providers: [
     ChecksService,

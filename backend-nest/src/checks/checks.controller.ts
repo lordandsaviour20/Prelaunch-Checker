@@ -1,28 +1,102 @@
-import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
-import { ChecksService } from './checks.service';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import * as cheerio from 'cheerio';
-import { CrawlerService } from './crawler.service';
-import { CrawlChecksService } from './crawl-checks.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { ChecksService } from './checks.service';
+import { CrawlerService } from './crawler.service';
+import { CrawlChecksService } from './crawl-checks.service';
 import { SITE_CHECKS_QUEUE } from '../queue/queue.constants';
 import { DbService } from '../db/db.service';
 import { DiffService } from '../db/diff.service';
 import { EmailService } from '../notifications/email.service';
 import { SeoAuditService } from '../seo-audit/seo-audit.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import type { AuthedRequest } from '../auth/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
+import { CheckRateLimitGuard } from './check-rate-limit.guard';
+import { SubmitCheckDto } from './dto/submit-check.dto';
 
 @Controller('checks')
 export class ChecksController {
-    constructor(
-        private readonly checks: ChecksService,
-        private readonly crawler: CrawlerService,
-        private readonly crawlChecks: CrawlChecksService,
-        private readonly db: DbService,
-        private readonly diff: DiffService,
-        private readonly emailService: EmailService,
-        private readonly seoAudit: SeoAuditService,
-        @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
-      ) {}
+  constructor(
+    private readonly checks: ChecksService,
+    private readonly crawler: CrawlerService,
+    private readonly crawlChecks: CrawlChecksService,
+    private readonly db: DbService,
+    private readonly diff: DiffService,
+    private readonly emailService: EmailService,
+    private readonly seoAudit: SeoAuditService,
+    @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
+  ) {}
+
+  @Post('api-check')
+  @UseGuards(OptionalJwtAuthGuard, CheckRateLimitGuard)
+  async submitCheck(@Body() dto: SubmitCheckDto, @Req() req: AuthedRequest) {
+    const normalizedUrl = this.checks.normalizeUrl(dto.url);
+    if (!normalizedUrl) {
+      throw new BadRequestException('Please provide a valid URL');
+    }
+
+    const job = await this.queue.add('check-site', {
+      url: normalizedUrl,
+      userId: req.userId,
+      maxPages: dto.maxPages ?? null,
+    });
+
+    return { jobId: job.id, status: 'queued' };
+  }
+
+  @Get('api-check/:jobId')
+  @UseGuards(OptionalJwtAuthGuard)
+  async getCheckStatus(@Param('jobId') jobId: string, @Req() req: AuthedRequest) {
+    const job = await this.queue.getJob(jobId);
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    if (job.data.userId && job.data.userId !== req.userId) {
+      throw new ForbiddenException('Not your job');
+    }
+
+    const state = await job.getState();
+
+    if (state === 'completed') {
+      return { status: 'completed', report: job.returnvalue };
+    }
+    if (state === 'failed') {
+      return { status: 'failed', error: job.failedReason };
+    }
+    return { status: state };
+  }
+
+  @Delete('api-check/:jobId')
+  async cancelCheck(@Param('jobId') jobId: string) {
+    const job = await this.queue.getJob(jobId);
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    const state = await job.getState();
+
+    if (state === 'waiting' || state === 'delayed') {
+      await job.remove();
+    } else {
+      await job.updateData({ ...job.data, cancelled: true });
+    }
+  }
 
   @Get('test')
   async test(@Query('url') url: string) {
@@ -46,6 +120,7 @@ export class ChecksController {
       imagesAlt: this.checks.checkImagesAlt($),
     };
   }
+
   @Get('site-test')
   async siteTest(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -66,6 +141,7 @@ export class ChecksController {
     const $ = cheerio.load(accessible.html);
     return this.checks.checkBrokenLinks($, normalized);
   }
+
   @Get('ai-test')
   async aiTest(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -83,12 +159,14 @@ export class ChecksController {
       antiBotAccess: await this.checks.checkAntiBotAccess(normalized),
     };
   }
+
   @Get('run')
   async run(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
     if (!normalized) throw new BadRequestException('Invalid URL');
     return this.checks.runAllChecks(normalized);
   }
+
   @Get('crawl-test')
   async crawlTest(@Query('url') url: string, @Query('max') max = '3') {
     const normalized = this.checks.normalizeUrl(url);
@@ -102,6 +180,7 @@ export class ChecksController {
       ),
     }));
   }
+
   @Get('run-crawl')
   async runCrawl(@Query('url') url: string, @Query('max') max = '3') {
     const normalized = this.checks.normalizeUrl(url);
@@ -109,6 +188,7 @@ export class ChecksController {
     const maxPages = Math.min(Number(max) || 3, 10);
     return this.crawlChecks.runCrawlChecks(normalized, maxPages);
   }
+
   @Get('queue-test')
   async queueTest(@Query('url') url: string, @Query('userId') userId?: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -119,6 +199,7 @@ export class ChecksController {
     });
     return { jobId: job.id, message: 'Job added, check the terminal logs' };
   }
+
   @Get('db-test')
   async dbTest() {
     const user = await this.db.getUserById(1);
@@ -131,6 +212,7 @@ export class ChecksController {
     const notifications = await this.db.getNotificationsByUser(1);
     return { dueCount: due.length, notificationCount: notifications.length };
   }
+
   @Get('diff-test')
   diffTest() {
     const previous = { checks: { ssl: { status: 'pass' }, title: { status: 'fail' } } };
@@ -146,6 +228,7 @@ export class ChecksController {
     });
     return { sent: 'check your inbox (and the terminal for errors)' };
   }
+
   @Get('seo-meta-test')
   async seoMetaTest(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -158,6 +241,7 @@ export class ChecksController {
       headings: this.seoAudit.analyzeHeadings($),
     };
   }
+
   @Get('seo-images-test')
   async seoImagesTest(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -169,6 +253,7 @@ export class ChecksController {
     const meta = await this.seoAudit.analyzeImageMetadata(base.images);
     return { findings: [...base.findings, ...meta.findings], imageCount: base.images.length };
   }
+
   @Get('seo-url-test')
   async seoUrlTest(@Query('url') url: string) {
     const normalized = this.checks.normalizeUrl(url);
@@ -198,6 +283,7 @@ export class ChecksController {
     if (!normalized) throw new BadRequestException('Invalid URL');
     return this.seoAudit.runSeoAudit(normalized);
   }
+
   @Get('seo-crawl-test')
   async seoCrawlTest(@Query('url') url: string, @Query('max') max = '3') {
     const normalized = this.checks.normalizeUrl(url);
