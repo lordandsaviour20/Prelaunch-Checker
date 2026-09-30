@@ -1,3 +1,5 @@
+import { CheckMap } from '../checks/checks.types';
+
 export interface ReportRow {
     id: number;
     url: string;
@@ -19,7 +21,7 @@ export interface ReportRow {
     checkedAt: string;
     score: number;
     grade: string;
-    checks: Record<string, unknown>;
+    checks: CheckMap;
     [key: string]: unknown;
   }
   

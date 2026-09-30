@@ -15,13 +15,11 @@ import {
 interface ReportLike {
   url: string;
   checkedAt: string;
-  [key: string]: unknown;
 }
 
 interface SeoAuditLike {
     url: string;
     checkedAt: string;
-    [key: string]: unknown;
   }
 
 @Injectable()

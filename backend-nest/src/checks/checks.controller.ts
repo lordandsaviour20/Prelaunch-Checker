@@ -110,8 +110,13 @@ export class ChecksController {
     return this.crawlChecks.runCrawlChecks(normalized, maxPages);
   }
   @Get('queue-test')
-  async queueTest(@Query('url') url: string) {
-    const job = await this.queue.add('check', { url });
+  async queueTest(@Query('url') url: string, @Query('userId') userId?: string) {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const job = await this.queue.add('check', {
+      url: normalized,
+      userId: userId ? Number(userId) : undefined,
+    });
     return { jobId: job.id, message: 'Job added, check the terminal logs' };
   }
   @Get('db-test')

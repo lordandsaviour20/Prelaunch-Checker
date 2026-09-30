@@ -1,6 +1,5 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { ChecksProcessor } from './checks.processor';
 import { SITE_CHECKS_QUEUE } from './queue.constants';
 
 @Module({
@@ -12,7 +11,6 @@ import { SITE_CHECKS_QUEUE } from './queue.constants';
       name: SITE_CHECKS_QUEUE,
     }),
   ],
-  providers: [ChecksProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}
