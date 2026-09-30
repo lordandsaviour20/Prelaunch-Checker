@@ -193,4 +193,11 @@ export class ChecksController {
     if (!normalized) throw new BadRequestException('Invalid URL');
     return this.seoAudit.runSeoAudit(normalized);
   }
+  @Get('seo-crawl-test')
+  async seoCrawlTest(@Query('url') url: string, @Query('max') max = '3') {
+    const normalized = this.checks.normalizeUrl(url);
+    if (!normalized) throw new BadRequestException('Invalid URL');
+    const maxPages = Math.min(Number(max) || 3, 10);
+    return this.seoAudit.runSeoAuditCrawl(normalized, maxPages);
+  }
 }

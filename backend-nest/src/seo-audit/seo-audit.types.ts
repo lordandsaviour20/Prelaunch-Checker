@@ -96,3 +96,32 @@ export interface ImageAnalysisResult extends ModuleResult {
   export interface RunSeoAuditOptions {
     rootHostname?: string;
   }
+
+  export interface SeoAuditPageResult extends ScoredModules {
+    url: string;
+    modules: Record<string, ModuleResult>;
+    fetchError?: string;
+  }
+  
+  export interface AggregatedSeoFinding {
+    id: string;
+    label: string;
+    severity: Severity;
+    detail: string;
+    recommendation: string | null;
+    issues: { url: string; severity: Severity; detail: string }[];
+  }
+  
+  export interface AggregatedSeoModule {
+    label: string;
+    findings: AggregatedSeoFinding[];
+  }
+  
+  export interface SeoAuditCrawlReport extends ScoredModules {
+    url: string;
+    checkedAt: string;
+    modules: Record<string, AggregatedSeoModule>;
+    isCrawl: true;
+    pagesCrawled: number;
+    pages: { url: string; modules: Record<string, ModuleResult>; score: number; summary: AuditSummary }[];
+  }

@@ -3,26 +3,31 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import {
-    AuditSummary,
-    CanonicalResult,
-    Finding,
-    HeadingNode,
-    ImageAnalysisResult,
-    ImageDetail,
-    ImageMetadataResult,
-    ImageWithMetadata,
-    IndexabilityInput,
-    IndexabilityResult,
-    ModuleResult,
-    ModuleScore,
-    RunSeoAuditOptions,
-    ScoredModules,
-    SeoAuditReport,
-    Severity,
-  } from './seo-audit.types';
+  AggregatedSeoFinding,
+  AggregatedSeoModule,
+  AuditSummary,
+  CanonicalResult,
+  Finding,
+  HeadingNode,
+  ImageAnalysisResult,
+  ImageDetail,
+  ImageMetadataResult,
+  ImageWithMetadata,
+  IndexabilityInput,
+  IndexabilityResult,
+  ModuleResult,
+  ModuleScore,
+  RunSeoAuditOptions,
+  ScoredModules,
+  SeoAuditCrawlReport,
+  SeoAuditPageResult,
+  SeoAuditReport,
+  Severity,
+} from './seo-audit.types';
 
 const MAX_IMAGES_TO_CHECK = 30;
 const IMAGE_CONCURRENCY = 5;
+const SEO_CRAWL_CONCURRENCY = 2;
 
 const MODULE_LABELS: Record<string, string> = {
     metaTags: 'Meta Tags',
@@ -1152,5 +1157,139 @@ export class SeoAuditService {
     }
 
     return report;
+  }
+  private async crawlSeoAudit(rootUrl: string, maxPages: number): Promise<SeoAuditPageResult[]> {
+    const rootHostname = new URL(rootUrl).hostname;
+    const visited = new Set<string>();
+    const queue: string[] = [rootUrl];
+    const pages: SeoAuditPageResult[] = [];
+
+    while (queue.length > 0 && pages.length < maxPages) {
+      const remaining = maxPages - pages.length;
+      const batch: string[] = [];
+      while (
+        batch.length < SEO_CRAWL_CONCURRENCY &&
+        batch.length < remaining &&
+        queue.length > 0
+      ) {
+        const next = queue.shift() as string;
+        if (visited.has(next)) continue;
+        visited.add(next);
+        batch.push(next);
+      }
+      if (batch.length === 0) break;
+
+      const results = await Promise.all(
+        batch.map((pageUrl) =>
+          this.runSeoAudit(pageUrl, { rootHostname }).catch((err) => ({
+            url: pageUrl,
+            modules: {},
+            summary: { critical: 0, warning: 0, passed: 0, total: 0 },
+            score: 0,
+            overallCapped: false,
+            moduleScores: [],
+            internalLinks: [],
+            fetchError: err instanceof Error ? err.message : String(err),
+          })),
+        ),
+      );
+
+      for (const result of results) {
+        const { internalLinks = [], ...pageReport } = result;
+        pages.push(pageReport);
+        for (const link of internalLinks) {
+          if (!visited.has(link) && !queue.includes(link)) {
+            queue.push(link);
+          }
+        }
+      }
+    }
+
+    return pages;
+  }
+
+  // Aggregates per-finding (by id) across every crawled page - e.g. "Title Tag"
+  // becomes one row saying "6 of 8 pages passing" with a per-page issue list,
+  // same shape/spirit as ChecksService's aggregateCrawlChecks.
+  private aggregateSeoModules(pages: SeoAuditPageResult[]): Record<string, AggregatedSeoModule> {
+    const moduleKeys = new Set<string>();
+    pages.forEach((p) => Object.keys(p.modules || {}).forEach((k) => moduleKeys.add(k)));
+
+    const aggregatedModules: Record<string, AggregatedSeoModule> = {};
+
+    for (const moduleKey of moduleKeys) {
+      const findingIds = new Set<string>();
+      pages.forEach((p) => {
+        const mod = p.modules[moduleKey];
+        if (mod) mod.findings.forEach((f) => findingIds.add(f.id));
+      });
+
+      const aggregatedFindings: AggregatedSeoFinding[] = [];
+      for (const findingId of findingIds) {
+        const perPage = pages
+          .map((p) => {
+            const mod = p.modules[moduleKey];
+            const f = mod?.findings.find((x) => x.id === findingId);
+            return f ? { url: p.url, finding: f } : null;
+          })
+          .filter((x): x is { url: string; finding: Finding } => x !== null);
+
+        if (perPage.length === 0) continue;
+
+        const total = perPage.length;
+        const criticalCount = perPage.filter((x) => x.finding.severity === 'critical').length;
+        const warningCount = perPage.filter((x) => x.finding.severity === 'warning').length;
+        const passedCount = total - criticalCount - warningCount;
+
+        let severity: Severity = 'passed';
+        if (criticalCount / total > 0.2) severity = 'critical';
+        else if (criticalCount > 0 || warningCount > 0) severity = 'warning';
+
+        const label = perPage[0].finding.label;
+        const recommendation =
+          perPage.find((x) => x.finding.recommendation)?.finding.recommendation || null;
+
+        const issues = perPage
+          .filter((x) => x.finding.severity !== 'passed')
+          .map((x) => ({ url: x.url, severity: x.finding.severity, detail: x.finding.detail }));
+
+        aggregatedFindings.push({
+          id: findingId,
+          label,
+          severity,
+          detail:
+            `${passedCount} of ${total} page${total !== 1 ? 's' : ''} passing` +
+            (criticalCount > 0 ? `, ${criticalCount} critical` : '') +
+            (warningCount > 0 ? `, ${warningCount} warning${warningCount !== 1 ? 's' : ''}` : '') +
+            '.',
+          recommendation,
+          issues,
+        });
+      }
+
+      const label = pages.find((p) => p.modules[moduleKey])?.modules[moduleKey].label || moduleKey;
+      aggregatedModules[moduleKey] = { label, findings: aggregatedFindings };
+    }
+
+    return aggregatedModules;
+  }
+
+  async runSeoAuditCrawl(rootUrl: string, maxPages: number): Promise<SeoAuditCrawlReport> {
+    const pages = await this.crawlSeoAudit(rootUrl, maxPages);
+    const aggregatedModules = this.aggregateSeoModules(pages);
+    const { score, overallCapped, summary, moduleScores } = this.scoreModules(aggregatedModules);
+
+    return {
+      url: rootUrl,
+      checkedAt: new Date().toISOString(),
+      score,
+      overallCapped,
+      summary,
+      moduleScores,
+      modules: aggregatedModules,
+      isCrawl: true,
+      pagesCrawled: pages.length,
+      pages: pages.map((p) => ({ url: p.url, modules: p.modules, score: p.score, summary: p.summary })),
+    };
   }
 }
