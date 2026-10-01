@@ -358,4 +358,17 @@ export class ChecksController {
     const deleted = await this.db.deleteScheduledCheck(Number(id), req.userId as number);
     if (!deleted) throw new NotFoundException('Scheduled check not found');
   }
+  @Get('api-notifications')
+  @UseGuards(JwtAuthGuard)
+  async listNotifications(@Req() req: AuthedRequest) {
+    return this.db.getNotificationsByUser(req.userId as number);
+  }
+
+  @Post('api-notifications/:id/read')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(204)
+  async markNotificationRead(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const updated = await this.db.markNotificationRead(Number(id), req.userId as number);
+    if (!updated) throw new NotFoundException('Notification not found');
+  }
 }
