@@ -1,4 +1,5 @@
 import { CheckMap } from '../checks/checks.types';
+import { SeoAuditReport, SeoAuditCrawlReport } from '../seo-audit/seo-audit.types';
 
 export interface ReportRow {
     id: number;
@@ -73,4 +74,8 @@ export interface ReportRow {
     checkedAt: string;
     score: number;
     [key: string]: unknown;
+  }
+
+  export interface SavedSeoAudit extends Omit<SeoAuditReport | SeoAuditCrawlReport, 'id'> {
+    id: number;
   }

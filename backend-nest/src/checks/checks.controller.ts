@@ -33,6 +33,8 @@ import { PdfService } from '../pdf/pdf.service';
 import { Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { CreateScheduledCheckDto } from './dto/create-scheduled-check.dto';
+import { SeoAuditPdfService } from '../pdf/seo-audit-pdf.service';
+import { SubmitSeoAuditDto } from '../seo-audit/dto/submit-seo-audit.dto';
 
 @Controller('checks')
 export class ChecksController {
@@ -45,6 +47,7 @@ export class ChecksController {
     private readonly emailService: EmailService,
     private readonly seoAudit: SeoAuditService,
     private readonly pdfService: PdfService,
+    private readonly seoAuditPdfService: SeoAuditPdfService,
     @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
   ) {}
 
@@ -370,5 +373,59 @@ export class ChecksController {
   async markNotificationRead(@Param('id') id: string, @Req() req: AuthedRequest) {
     const updated = await this.db.markNotificationRead(Number(id), req.userId as number);
     if (!updated) throw new NotFoundException('Notification not found');
+  }
+  @Post('api-seo-audit')
+  @UseGuards(OptionalJwtAuthGuard, CheckRateLimitGuard)
+  async submitSeoAudit(@Body() dto: SubmitSeoAuditDto, @Req() req: AuthedRequest) {
+    const normalizedUrl = this.checks.normalizeUrl(dto.url);
+    if (!normalizedUrl) throw new BadRequestException('Please provide a valid URL');
+
+    const job = await this.queue.add('seo-audit', {
+      url: normalizedUrl,
+      userId: req.userId,
+      auditType: 'seo',
+      maxPages: dto.maxPages ?? null,
+    });
+
+    return { jobId: job.id, status: 'queued' };
+  }
+
+  @Get('api-seo-reports')
+  @UseGuards(JwtAuthGuard)
+  async listSeoAudits(@Req() req: AuthedRequest) {
+    return this.db.getRecentSeoAudits(req.userId as number);
+  }
+
+  @Get('api-seo-reports/:id')
+  @UseGuards(JwtAuthGuard)
+  async getSeoAudit(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const audit = await this.db.getSeoAuditById(Number(id), req.userId as number);
+    if (!audit) throw new NotFoundException('SEO audit not found');
+    return audit;
+  }
+
+  @Delete('api-seo-reports/:id')
+  @UseGuards(JwtAuthGuard)
+  async removeSeoAudit(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const deleted = await this.db.deleteSeoAudit(Number(id), req.userId as number);
+    if (!deleted) throw new NotFoundException('SEO audit not found');
+  }
+
+  @Get('api-seo-reports/:id/pdf')
+  @UseGuards(JwtAuthGuard)
+  async getSeoAuditPdf(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    const audit = await this.db.getSeoAuditById(Number(id), req.userId as number);
+    if (!audit) throw new NotFoundException('SEO audit not found');
+
+    const user = await this.db.getUserById(req.userId as number);
+    const pdfBuffer = await this.seoAuditPdfService.generateSeoAuditPdf(audit, user?.email);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="seo-audit-${id}.pdf"`);
+    res.send(pdfBuffer);
   }
 }
