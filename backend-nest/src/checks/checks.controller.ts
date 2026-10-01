@@ -5,6 +5,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   Post,
@@ -31,6 +32,7 @@ import { SubmitCheckDto } from './dto/submit-check.dto';
 import { PdfService } from '../pdf/pdf.service';
 import { Res } from '@nestjs/common';
 import type { Response } from 'express';
+import { CreateScheduledCheckDto } from './dto/create-scheduled-check.dto';
 
 @Controller('checks')
 export class ChecksController {
@@ -332,5 +334,28 @@ export class ChecksController {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="report-${id}.pdf"`);
     res.send(pdfBuffer);
+  }
+  @Post('api-scheduled-checks')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(201)
+  async createScheduledCheck(@Body() dto: CreateScheduledCheckDto, @Req() req: AuthedRequest) {
+    const normalizedUrl = this.checks.normalizeUrl(dto.url);
+    if (!normalizedUrl) throw new BadRequestException('Please provide a valid URL');
+
+    const id = await this.db.createScheduledCheck(req.userId as number, normalizedUrl, dto.intervalType);
+    return { id };
+  }
+
+  @Get('api-scheduled-checks')
+  @UseGuards(JwtAuthGuard)
+  async listScheduledChecks(@Req() req: AuthedRequest) {
+    return this.db.getScheduledChecksByUser(req.userId as number);
+  }
+
+  @Delete('api-scheduled-checks/:id')
+  @UseGuards(JwtAuthGuard)
+  async removeScheduledCheck(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const deleted = await this.db.deleteScheduledCheck(Number(id), req.userId as number);
+    if (!deleted) throw new NotFoundException('Scheduled check not found');
   }
 }
