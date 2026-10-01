@@ -28,6 +28,9 @@ import type { AuthedRequest } from '../auth/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/optional-jwt-auth.guard';
 import { CheckRateLimitGuard } from './check-rate-limit.guard';
 import { SubmitCheckDto } from './dto/submit-check.dto';
+import { PdfService } from '../pdf/pdf.service';
+import { Res } from '@nestjs/common';
+import type { Response } from 'express';
 
 @Controller('checks')
 export class ChecksController {
@@ -39,6 +42,7 @@ export class ChecksController {
     private readonly diff: DiffService,
     private readonly emailService: EmailService,
     private readonly seoAudit: SeoAuditService,
+    private readonly pdfService: PdfService,
     @InjectQueue(SITE_CHECKS_QUEUE) private readonly queue: Queue,
   ) {}
 
@@ -290,5 +294,43 @@ export class ChecksController {
     if (!normalized) throw new BadRequestException('Invalid URL');
     const maxPages = Math.min(Number(max) || 3, 10);
     return this.seoAudit.runSeoAuditCrawl(normalized, maxPages);
+  }
+  @Get('api-reports')
+  @UseGuards(JwtAuthGuard)
+  async listReports(@Req() req: AuthedRequest) {
+    return this.db.getRecentReports(req.userId as number);
+  }
+
+  @Get('api-reports/:id')
+  @UseGuards(JwtAuthGuard)
+  async getReport(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const report = await this.db.getReportById(Number(id), req.userId as number);
+    if (!report) throw new NotFoundException('Report not found');
+    return report;
+  }
+
+  @Delete('api-reports/:id')
+  @UseGuards(JwtAuthGuard)
+  async removeReport(@Param('id') id: string, @Req() req: AuthedRequest) {
+    const deleted = await this.db.deleteReport(Number(id), req.userId as number);
+    if (!deleted) throw new NotFoundException('Report not found');
+  }
+
+  @Get('api-reports/:id/pdf')
+  @UseGuards(JwtAuthGuard)
+  async getReportPdf(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+    @Res() res: Response,
+  ) {
+    const report = await this.db.getReportById(Number(id), req.userId as number);
+    if (!report) throw new NotFoundException('Report not found');
+
+    const user = await this.db.getUserById(req.userId as number);
+    const pdfBuffer = await this.pdfService.generatePdf(report, user?.email);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="report-${id}.pdf"`);
+    res.send(pdfBuffer);
   }
 }
