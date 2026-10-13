@@ -851,6 +851,10 @@ function HistorySidebar({
           </ul>
         )}
         {user && <ScheduledChecksList checks={scheduledChecks} onDelete={onDeleteSchedule} />}
+
+        <div className="sidebar-footer">
+          Made by <b>Aneega Sankassa</b> (2 October 2026). V1 is completed and stopped at V2 Phase 1 - Migrated the Backend to TypeScript and NestJS.
+        </div>
       </div>
     </>
   );

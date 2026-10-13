@@ -2787,3 +2787,17 @@
       border-top: 1px dashed var(--glass-border);
     }
   }
+
+  /* ---- Sidebar credit line ---- */
+.sidebar-footer {
+  margin-top: auto;            /* pins to the bottom of the flex-column sidebar */
+  position: sticky;            /* stays visible when the history list scrolls */
+  bottom: 100px;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-xs);
+  line-height: 1.7;
+  color: var(--color-muted-foreground);
+  background: var(--glass-bg-strong);
+  border-top: 1px solid var(--glass-border);
+  overflow-wrap: anywhere;
+}
